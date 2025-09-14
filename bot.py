@@ -12,7 +12,7 @@ from typing import Dict, Any
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, 
-    ConversationHandler, ContextTypes
+    ConversationHandler, ContextTypes, MessageHandler, filters
 )
 
 from database import (
@@ -34,7 +34,7 @@ if not BOT_TOKEN:
     raise ValueError("Переменная окружения TELEGRAM_TEST_BOT_API не установлена!")
 
 # Состояния для ConversationHandler
-SELECTING_DATE, SELECTING_TIME = range(2)
+SELECTING_DATE, SELECTING_TIME, SELECTING_DURATION = range(3)
 
 # Доступные временные слоты (можно настроить под ваши нужды)
 TIME_SLOTS = [
@@ -42,8 +42,6 @@ TIME_SLOTS = [
     "16:00", "17:00", "18:00", "19:00", "20:00", "21:00"
 ]
 
-# Длительность бронирования (в часах)
-BOOKING_DURATION = 2
 
 # ID администратора (замените на свой)
 ADMIN_TELEGRAM_ID = 411840215  # Замените на ваш Telegram ID
@@ -200,10 +198,10 @@ async def date_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Обработка выбора времени и создание бронирования.
+    Обработка выбора времени. Сохраняет время и запрашивает длительность.
     
     Returns:
-        int: Завершение ConversationHandler
+        int: Следующее состояние ConversationHandler
     """
     query = update.callback_query
     await query.answer()
@@ -212,13 +210,60 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     time_str = query.data.split('_')[1]  # "time_14:00" -> "14:00"
     hour, minute = map(int, time_str.split(':'))
     
+    # Сохраняем выбранное время в контексте
+    context.user_data['selected_time'] = time_str
+    context.user_data['selected_hour'] = hour
+    context.user_data['selected_minute'] = minute
+    
+    message = (
+        f"✅ Время выбрано: {time_str}\n\n"
+        "⏱️ На сколько часов вы хотите записаться? (от 1 до 8)\n\n"
+        "Введите число часов:"
+    )
+    
+    await query.edit_message_text(message)
+    return SELECTING_DURATION
+
+
+async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обработка выбора длительности и создание бронирования.
+    
+    Returns:
+        int: Завершение ConversationHandler
+    """
+    # Извлекаем текст из сообщения пользователя
+    duration_text = update.message.text.strip()
+    
+    try:
+        # Пытаемся преобразовать в число
+        duration_hours = int(duration_text)
+        
+        # Проверяем, что число в допустимом диапазоне
+        if duration_hours < 1 or duration_hours > 8:
+            await update.message.reply_text(
+                "❌ Пожалуйста, введите число от 1 до 8 часов.\n\n"
+                "Попробуйте еще раз:"
+            )
+            return SELECTING_DURATION
+            
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Пожалуйста, введите корректное число часов (от 1 до 8).\n\n"
+            "Попробуйте еще раз:"
+        )
+        return SELECTING_DURATION
+    
     # Получаем данные из контекста
     user_id = context.user_data['user_id']
     selected_date = context.user_data['selected_date']
+    selected_hour = context.user_data['selected_hour']
+    selected_minute = context.user_data['selected_minute']
+    selected_time = context.user_data['selected_time']
     
     # Создаем datetime объекты для начала и окончания бронирования
-    start_time = datetime.combine(selected_date, time(hour, minute))
-    end_time = start_time + timedelta(hours=BOOKING_DURATION)
+    start_time = datetime.combine(selected_date, time(selected_hour, selected_minute))
+    end_time = start_time + timedelta(hours=duration_hours)
     
     # Проверяем, не конфликтует ли бронирование с существующими
     has_conflict = await check_booking_conflict(start_time, end_time)
@@ -228,7 +273,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             "❌ К сожалению, это время уже занято.\n\n"
             "Пожалуйста, выберите другое время, используя команду /book"
         )
-        await query.edit_message_text(message)
+        await update.message.reply_text(message)
         return ConversationHandler.END
     
     # Проверяем абонемент пользователя
@@ -238,7 +283,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         message = (
             "❌ У вас нет доступных посещений. Пожалуйста, сначала приобретите абонемент с помощью команды /buy."
         )
-        await query.edit_message_text(message)
+        await update.message.reply_text(message)
         return ConversationHandler.END
     
     # Списываем одно посещение
@@ -248,7 +293,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         message = (
             "❌ Не удалось списать посещение. Попробуйте еще раз."
         )
-        await query.edit_message_text(message)
+        await update.message.reply_text(message)
         return ConversationHandler.END
     
     # Добавляем бронирование в базу данных
@@ -262,8 +307,8 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         message = (
             f"🎉 Поздравляем! Вы успешно записаны!\n\n"
             f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n"
-            f"🕐 Время: {time_str} - {(start_time + timedelta(hours=BOOKING_DURATION)).strftime('%H:%M')}\n"
-            f"⏱️ Длительность: {BOOKING_DURATION} часа\n"
+            f"🕐 Время: {selected_time} - {end_time.strftime('%H:%M')}\n"
+            f"⏱️ Длительность: {duration_hours} часа\n"
             f"🎫 Осталось посещений: {visits_left}\n\n"
             "До встречи в мастерской! 🎨"
         )
@@ -275,7 +320,7 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             "Пожалуйста, попробуйте еще раз, используя команду /book"
         )
     
-    await query.edit_message_text(message)
+    await update.message.reply_text(message)
     return ConversationHandler.END
 
 
@@ -375,6 +420,7 @@ def main() -> None:
         states={
             SELECTING_DATE: [CallbackQueryHandler(date_selected, pattern="^date_")],
             SELECTING_TIME: [CallbackQueryHandler(time_selected, pattern="^time_")],
+            SELECTING_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, duration_selected)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         name="booking_conversation",
