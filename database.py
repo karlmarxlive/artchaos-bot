@@ -9,7 +9,7 @@ from typing import Optional
 
 from sqlalchemy import create_engine, Column, Integer, String, DateTime
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # Создаем базовый класс для моделей
@@ -57,7 +57,6 @@ async def init_database():
     # Создаем все таблицы
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-
 
 async def close_database():
     """
