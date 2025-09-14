@@ -15,7 +15,10 @@ from telegram.ext import (
     ConversationHandler, ContextTypes
 )
 
-from database import init_database, close_database, add_booking, check_booking_conflict
+from database import (
+    init_database, close_database, add_booking, check_booking_conflict,
+    get_or_create_user, get_user_abonement, decrease_user_visits, add_user_visits
+)
 
 # Настройка логирования
 logging.basicConfig(
@@ -41,6 +44,9 @@ TIME_SLOTS = [
 
 # Длительность бронирования (в часах)
 BOOKING_DURATION = 2
+
+# ID администратора (замените на свой)
+ADMIN_TELEGRAM_ID = 411840215  # Замените на ваш Telegram ID
 
 
 def get_date_buttons() -> InlineKeyboardMarkup:
@@ -105,13 +111,23 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """
     Обработчик команды /help.
     """
+    user = update.effective_user
+    
     help_text = (
         "📋 Справка по использованию бота:\n\n"
         "/start - Начать работу с ботом\n"
         "/book - Забронировать время в мастерской\n"
         "/help - Показать эту справку\n\n"
-        "💡 Для бронирования используйте команду /book и следуйте инструкциям бота."
+        "💡 Для бронирования используйте команду /book и следуйте инструкциям бота.\n"
+        "🎫 Для бронирования необходимо иметь абонемент с доступными посещениями."
     )
+    
+    # Добавляем админские команды для администратора
+    if user.id == ADMIN_TELEGRAM_ID:
+        help_text += (
+            "\n\n🔧 Админские команды:\n"
+            "/add_visits <telegram_id> <количество> - Добавить посещения пользователю"
+        )
     
     await update.message.reply_text(help_text)
 
@@ -125,8 +141,22 @@ async def book_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     user = update.effective_user
     
-    # Сохраняем информацию о пользователе в контексте
-    context.user_data['user_id'] = user.id
+    # Получаем или создаем пользователя в базе данных
+    db_user = await get_or_create_user(
+        telegram_id=user.id,
+        username=user.username,
+        first_name=user.first_name
+    )
+    
+    if db_user is None:
+        await update.message.reply_text(
+            "❌ Произошла ошибка при работе с базой данных. Попробуйте позже."
+        )
+        return ConversationHandler.END
+    
+    # Сохраняем внутренний ID пользователя из БД в контексте
+    context.user_data['user_id'] = db_user.id
+    context.user_data['telegram_id'] = user.id
     context.user_data['username'] = user.username or user.first_name
     
     message = (
@@ -184,7 +214,6 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     # Получаем данные из контекста
     user_id = context.user_data['user_id']
-    username = context.user_data['username']
     selected_date = context.user_data['selected_date']
     
     # Создаем datetime объекты для начала и окончания бронирования
@@ -202,18 +231,45 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await query.edit_message_text(message)
         return ConversationHandler.END
     
+    # Проверяем абонемент пользователя
+    abonement = await get_user_abonement(user_id)
+    
+    if abonement is None or abonement.visits_left <= 0:
+        message = (
+            "❌ У вас нет доступных посещений. Пожалуйста, сначала приобретите абонемент с помощью команды /buy."
+        )
+        await query.edit_message_text(message)
+        return ConversationHandler.END
+    
+    # Списываем одно посещение
+    visit_decreased = await decrease_user_visits(user_id)
+    
+    if not visit_decreased:
+        message = (
+            "❌ Не удалось списать посещение. Попробуйте еще раз."
+        )
+        await query.edit_message_text(message)
+        return ConversationHandler.END
+    
     # Добавляем бронирование в базу данных
-    success = await add_booking(user_id, username, start_time, end_time)
+    success = await add_booking(user_id, start_time, end_time)
     
     if success:
+        # Получаем обновленную информацию об абонементе
+        updated_abonement = await get_user_abonement(user_id)
+        visits_left = updated_abonement.visits_left if updated_abonement else 0
+        
         message = (
             f"🎉 Поздравляем! Вы успешно записаны!\n\n"
             f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n"
             f"🕐 Время: {time_str} - {(start_time + timedelta(hours=BOOKING_DURATION)).strftime('%H:%M')}\n"
-            f"⏱️ Длительность: {BOOKING_DURATION} часа\n\n"
+            f"⏱️ Длительность: {BOOKING_DURATION} часа\n"
+            f"🎫 Осталось посещений: {visits_left}\n\n"
             "До встречи в мастерской! 🎨"
         )
     else:
+        # Если бронирование не удалось, возвращаем посещение
+        await add_user_visits(user_id, 1)
         message = (
             "❌ Произошла ошибка при сохранении бронирования.\n\n"
             "Пожалуйста, попробуйте еще раз, используя команду /book"
@@ -235,6 +291,64 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Если захотите забронировать время, используйте команду /book"
     )
     return ConversationHandler.END
+
+
+async def add_visits(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Админская команда для добавления посещений пользователю.
+    Формат: /add_visits <telegram_id> <количество>
+    """
+    user = update.effective_user
+    
+    # Проверяем, что команду вызывает администратор
+    if user.id != ADMIN_TELEGRAM_ID:
+        await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+        return
+    
+    # Проверяем аргументы команды
+    if not context.args or len(context.args) != 2:
+        await update.message.reply_text(
+            "❌ Неверный формат команды.\n\n"
+            "Используйте: /add_visits <telegram_id> <количество>\n"
+            "Пример: /add_visits 123456789 5"
+        )
+        return
+    
+    try:
+        telegram_id = int(context.args[0])
+        count = int(context.args[1])
+        
+        if count <= 0:
+            await update.message.reply_text("❌ Количество посещений должно быть положительным числом.")
+            return
+        
+        # Получаем или создаем пользователя
+        db_user = await get_or_create_user(telegram_id, None, None)
+        
+        if db_user is None:
+            await update.message.reply_text("❌ Ошибка при работе с базой данных.")
+            return
+        
+        # Добавляем посещения
+        success = await add_user_visits(db_user.id, count)
+        
+        if success:
+            # Получаем обновленную информацию об абонементе
+            abonement = await get_user_abonement(db_user.id)
+            total_visits = abonement.visits_left if abonement else 0
+            
+            await update.message.reply_text(
+                f"✅ Успешно добавлено {count} посещений пользователю {telegram_id}.\n"
+                f"🎫 Всего посещений: {total_visits}"
+            )
+        else:
+            await update.message.reply_text("❌ Ошибка при добавлении посещений.")
+            
+    except ValueError:
+        await update.message.reply_text("❌ Неверный формат аргументов. Используйте числа.")
+    except Exception as e:
+        logger.error(f"Ошибка в команде add_visits: {e}")
+        await update.message.reply_text("❌ Произошла ошибка при выполнении команды.")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -270,6 +384,7 @@ def main() -> None:
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("add_visits", add_visits))
     application.add_handler(booking_conversation)
     
     # Добавляем обработчик ошибок
