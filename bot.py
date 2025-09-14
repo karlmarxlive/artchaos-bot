@@ -217,8 +217,8 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     message = (
         f"✅ Время выбрано: {time_str}\n\n"
-        "⏱️ На сколько часов вы хотите записаться? (от 1 до 8)\n\n"
-        "Введите число часов:"
+        "⏱️ На сколько часов вы хотите записаться?\n\n"
+        "Введите число (например, 1.5 или 2) или минуты (например, 30):"
     )
     
     await query.edit_message_text(message)
@@ -237,19 +237,28 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     try:
         # Пытаемся преобразовать в число
-        duration_hours = int(duration_text)
+        duration_value = float(duration_text)
         
-        # Проверяем, что число в допустимом диапазоне
-        if duration_hours < 1 or duration_hours > 8:
+        # Умный парсинг: если число больше 8, считаем его минутами
+        if duration_value > 8:
+            # Считаем как минуты
+            duration_hours = duration_value / 60
+        else:
+            # Считаем как часы
+            duration_hours = duration_value
+        
+        # Проверяем, что число в допустимом диапазоне (от 0.5 до 8 часов)
+        if duration_hours < 0.5 or duration_hours > 8:
             await update.message.reply_text(
-                "❌ Пожалуйста, введите число от 1 до 8 часов.\n\n"
+                "❌ Пожалуйста, введите число часов (например, 1.5 или 2) или минут (например, 30).\n\n"
+                "Диапазон: от 30 минут до 8 часов.\n"
                 "Попробуйте еще раз:"
             )
             return SELECTING_DURATION
             
     except ValueError:
         await update.message.reply_text(
-            "❌ Пожалуйста, введите корректное число часов (от 1 до 8).\n\n"
+            "❌ Пожалуйста, введите корректное число часов (например, 1.5 или 2) или минут (например, 30).\n\n"
             "Попробуйте еще раз:"
         )
         return SELECTING_DURATION
@@ -270,11 +279,12 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     
     if has_conflict:
         message = (
-            "❌ К сожалению, это время уже занято.\n\n"
-            "Пожалуйста, выберите другое время, используя команду /book"
+            "❌ Увы, выбранное время и длительность уже заняты.\n\n"
+            "Пожалуйста, выберите другое время начала:"
         )
-        await update.message.reply_text(message)
-        return ConversationHandler.END
+        keyboard = get_time_buttons()
+        await update.message.reply_text(message, reply_markup=keyboard)
+        return SELECTING_TIME
     
     # Проверяем абонемент пользователя
     abonement = await get_user_abonement(user_id)
@@ -304,11 +314,22 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         updated_abonement = await get_user_abonement(user_id)
         visits_left = updated_abonement.visits_left if updated_abonement else 0
         
+        # Форматируем длительность для отображения
+        if duration_hours == 1:
+            duration_text = "1 час"
+        elif duration_hours < 1:
+            minutes = int(duration_hours * 60)
+            duration_text = f"{minutes} минут"
+        elif duration_hours == int(duration_hours):
+            duration_text = f"{int(duration_hours)} часа"
+        else:
+            duration_text = f"{duration_hours} часа"
+        
         message = (
             f"🎉 Поздравляем! Вы успешно записаны!\n\n"
             f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n"
             f"🕐 Время: {selected_time} - {end_time.strftime('%H:%M')}\n"
-            f"⏱️ Длительность: {duration_hours} часа\n"
+            f"⏱️ Длительность: {duration_text}\n"
             f"🎫 Осталось посещений: {visits_left}\n\n"
             "До встречи в мастерской! 🎨"
         )
