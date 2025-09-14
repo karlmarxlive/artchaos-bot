@@ -323,6 +323,9 @@ async def check_booking_conflict(start_time: datetime, end_time: datetime) -> bo
     """
     Проверяет, есть ли конфликт с существующими бронированиями.
     
+    Использует классическую формулу для проверки пересечения отрезков времени:
+    Пересечение существует, если StartA < EndB И StartB < EndA
+    
     Args:
         start_time: Время начала нового бронирования
         end_time: Время окончания нового бронирования
@@ -332,19 +335,13 @@ async def check_booking_conflict(start_time: datetime, end_time: datetime) -> bo
     """
     try:
         async with async_session() as session:
-            from sqlalchemy import select, and_, or_
+            from sqlalchemy import select
             
-            # Ищем пересекающиеся бронирования
+            # Ищем пересекающиеся бронирования используя классическую формулу
             result = await session.execute(
                 select(Booking).where(
-                    or_(
-                        # Новое бронирование начинается во время существующего
-                        and_(Booking.start_time <= start_time, Booking.end_time > start_time),
-                        # Новое бронирование заканчивается во время существующего
-                        and_(Booking.start_time < end_time, Booking.end_time >= end_time),
-                        # Новое бронирование полностью содержит существующее
-                        and_(Booking.start_time >= start_time, Booking.end_time <= end_time)
-                    )
+                    Booking.start_time < end_time,
+                    Booking.end_time > start_time
                 )
             )
             conflicting_bookings = result.scalars().all()
