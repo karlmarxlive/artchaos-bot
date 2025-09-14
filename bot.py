@@ -5,6 +5,7 @@ Telegram-бот для бронирования времени в творчес
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, time
 from typing import Dict, Any
 
@@ -23,8 +24,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Токен бота (в реальном проекте лучше использовать переменные окружения)
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"  # Замените на ваш токен
+# Токен бота из переменной окружения
+BOT_TOKEN = os.getenv("TELEGRAM_TEST_BOT_API")
+
+if not BOT_TOKEN:
+    raise ValueError("Переменная окружения TELEGRAM_TEST_BOT_API не установлена!")
 
 # Состояния для ConversationHandler
 SELECTING_DATE, SELECTING_TIME = range(2)

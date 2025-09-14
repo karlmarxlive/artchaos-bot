@@ -24,10 +24,16 @@ pip install -r requirements.txt
 
 1. Создайте бота через [@BotFather](https://t.me/BotFather) в Telegram
 2. Получите токен бота
-3. Замените `YOUR_BOT_TOKEN_HERE` в файле `bot.py` на ваш токен:
+3. Установите переменную окружения `TELEGRAM_TEST_BOT_API`:
 
-```python
-BOT_TOKEN = "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"  # Ваш токен
+**Windows (PowerShell):**
+```powershell
+$env:TELEGRAM_TEST_BOT_API="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
+```
+
+**Linux/macOS:**
+```bash
+export TELEGRAM_TEST_BOT_API="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
 ```
 
 ### 3. Запуск бота
