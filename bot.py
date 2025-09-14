@@ -17,7 +17,8 @@ from telegram.ext import (
 
 from database import (
     init_database, close_database, add_booking, check_booking_conflict,
-    get_or_create_user, get_user_abonement, decrease_user_visits, add_user_visits
+    get_or_create_user, get_user_abonement, decrease_user_visits, add_user_visits,
+    has_booking_on_date
 )
 
 # Настройка логирования
@@ -286,34 +287,35 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text(message, reply_markup=keyboard)
         return SELECTING_TIME
     
-    # Проверяем абонемент пользователя
-    abonement = await get_user_abonement(user_id)
+    # Проверяем, является ли это первым бронированием пользователя на выбранную дату
+    is_first_booking_today = not await has_booking_on_date(user_id, selected_date)
     
-    if abonement is None or abonement.visits_left <= 0:
-        message = (
-            "❌ У вас нет доступных посещений. Пожалуйста, сначала приобретите абонемент с помощью команды /buy."
-        )
-        await update.message.reply_text(message)
-        return ConversationHandler.END
+    # Если это первое бронирование за день, проверяем и списываем посещение
+    if is_first_booking_today:
+        # Проверяем абонемент пользователя
+        abonement = await get_user_abonement(user_id)
+        
+        if abonement is None or abonement.visits_left <= 0:
+            message = (
+                "❌ У вас нет доступных посещений. Пожалуйста, сначала приобретите абонемент с помощью команды /buy."
+            )
+            await update.message.reply_text(message)
+            return ConversationHandler.END
+        
+        # Списываем одно посещение
+        visit_decreased = await decrease_user_visits(user_id)
+        
+        if not visit_decreased:
+            message = (
+                "❌ Не удалось списать посещение. Попробуйте еще раз."
+            )
+            await update.message.reply_text(message)
+            return ConversationHandler.END
     
-    # Списываем одно посещение
-    visit_decreased = await decrease_user_visits(user_id)
-    
-    if not visit_decreased:
-        message = (
-            "❌ Не удалось списать посещение. Попробуйте еще раз."
-        )
-        await update.message.reply_text(message)
-        return ConversationHandler.END
-    
-    # Добавляем бронирование в базу данных
+    # Добавляем бронирование в базу данных (в любом случае)
     success = await add_booking(user_id, start_time, end_time)
     
     if success:
-        # Получаем обновленную информацию об абонементе
-        updated_abonement = await get_user_abonement(user_id)
-        visits_left = updated_abonement.visits_left if updated_abonement else 0
-        
         # Форматируем длительность для отображения
         if duration_hours == 1:
             duration_text = "1 час"
@@ -325,17 +327,34 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         else:
             duration_text = f"{duration_hours} часа"
         
-        message = (
-            f"🎉 Поздравляем! Вы успешно записаны!\n\n"
-            f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n"
-            f"🕐 Время: {selected_time} - {end_time.strftime('%H:%M')}\n"
-            f"⏱️ Длительность: {duration_text}\n"
-            f"🎫 Осталось посещений: {visits_left}\n\n"
-            "До встречи в мастерской! 🎨"
-        )
+        # Формируем сообщение в зависимости от того, было ли списано посещение
+        if is_first_booking_today:
+            # Получаем обновленную информацию об абонементе
+            updated_abonement = await get_user_abonement(user_id)
+            visits_left = updated_abonement.visits_left if updated_abonement else 0
+            
+            message = (
+                f"🎉 Поздравляем! Вы успешно записаны!\n\n"
+                f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n"
+                f"🕐 Время: {selected_time} - {end_time.strftime('%H:%M')}\n"
+                f"⏱️ Длительность: {duration_text}\n"
+                f"🎫 Осталось посещений: {visits_left}\n\n"
+                "До встречи в мастерской! 🎨"
+            )
+        else:
+            message = (
+                f"🎉 Поздравляем! Вы успешно записаны!\n\n"
+                f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n"
+                f"🕐 Время: {selected_time} - {end_time.strftime('%H:%M')}\n"
+                f"⏱️ Длительность: {duration_text}\n\n"
+                "💡 Это дополнительное бронирование на сегодня - посещение не списано.\n"
+                "До встречи в мастерской! 🎨"
+            )
     else:
-        # Если бронирование не удалось, возвращаем посещение
-        await add_user_visits(user_id, 1)
+        # Если бронирование не удалось, возвращаем посещение только если оно было списано
+        if is_first_booking_today:
+            await add_user_visits(user_id, 1)
+        
         message = (
             "❌ Произошла ошибка при сохранении бронирования.\n\n"
             "Пожалуйста, попробуйте еще раз, используя команду /book"

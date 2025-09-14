@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, func
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.orm import sessionmaker
@@ -351,6 +351,37 @@ async def check_booking_conflict(start_time: datetime, end_time: datetime) -> bo
     except Exception as e:
         print(f"Ошибка при проверке конфликтов: {e}")
         return True  # В случае ошибки считаем, что есть конфликт
+
+
+async def has_booking_on_date(user_id: int, date: datetime.date) -> bool:
+    """
+    Проверяет, есть ли у пользователя бронирования на указанную дату.
+    
+    Args:
+        user_id: ID пользователя в базе данных
+        date: Дата для проверки (объект date, без времени)
+    
+    Returns:
+        bool: True если есть бронирования на эту дату, False в противном случае
+    """
+    try:
+        async with async_session() as session:
+            from sqlalchemy import select
+            
+            # Ищем бронирования пользователя на указанную дату
+            result = await session.execute(
+                select(Booking).where(
+                    Booking.user_id == user_id,
+                    func.date(Booking.start_time) == date
+                )
+            )
+            bookings = result.scalars().all()
+            
+            return len(bookings) > 0
+            
+    except Exception as e:
+        print(f"Ошибка при проверке бронирований на дату: {e}")
+        return False  # В случае ошибки считаем, что бронирований нет
 
 
 # Функция для тестирования (можно удалить в продакшене)
