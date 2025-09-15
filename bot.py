@@ -110,7 +110,7 @@ def get_time_buttons() -> InlineKeyboardMarkup:
     Создает клавиатуру с кнопками для выбора времени.
     
     Returns:
-        InlineKeyboardMarkup: Клавиатура с временными слотами
+        InlineKeyboardMarkup: Клавиатура с временными слотами и кнопкой возврата
     """
     keyboard = []
 
@@ -122,6 +122,9 @@ def get_time_buttons() -> InlineKeyboardMarkup:
                 time_slot = TIME_SLOTS[i + j]
                 row.append(InlineKeyboardButton(time_slot, callback_data=f"time_{time_slot}"))
         keyboard.append(row)
+    
+    # Добавляем кнопку "Назад к выбору даты"
+    keyboard.append([InlineKeyboardButton("⬅️ Назад к выбору даты", callback_data="back_to_date")])
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -322,13 +325,18 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if new_booking_object:
         # Планируем напоминания
-        scheduler = context.application.bot_data['scheduler']
-        await schedule_reminders(
-            scheduler,
-            context.bot,
-            new_booking_object,
-            context.user_data['telegram_id']
-        )
+        try:
+            scheduler = context.application.bot_data['scheduler']
+            await schedule_reminders(
+                scheduler,
+                context.bot,
+                new_booking_object,
+                context.user_data['telegram_id']
+            )
+            logger.info("✅ Напоминания успешно запланированы")
+        except Exception as e:
+            # Если не удалось запланировать напоминания, логируем ошибку, но не отменяем бронирование
+            logger.error("❌ Ошибка при планировании напоминаний: %s", str(e), exc_info=True)
 
         # Форматируем длительность для отображения
         if duration_hours == 1:
@@ -373,6 +381,23 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await update.message.reply_text(message)
     return ConversationHandler.END
+
+
+async def back_to_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Обработчик возврата к выбору даты.
+    
+    Returns:
+        int: Состояние SELECTING_DATE
+    """
+    query = update.callback_query
+    await query.answer()
+    
+    message = MESSAGES['choose_date']
+    keyboard = get_date_buttons()
+    await query.edit_message_text(message, reply_markup=keyboard)
+    
+    return SELECTING_DATE
 
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -444,22 +469,42 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """
     Обработчик ошибок.
     """
-    logger.error("Ошибка при обработке обновления: %r", update)
+    # Логируем полную информацию об ошибке
+    logger.error("Ошибка при обработке обновления: %s", update, exc_info=context.error)
+    logger.error("Traceback:", exc_info=True)
+
+    error_message = "❌ Произошла ошибка.\n\n"
+    
+    # Добавляем специфичную информацию об ошибке
+    if isinstance(context.error, Exception):
+        error_message += f"Тип ошибки: {type(context.error).__name__}\n"
+        error_message += f"Описание: {str(context.error)}"
+
     if update and update.effective_message:
-        await update.effective_message.reply_text(
-            "❌ Произошла ошибка. Пожалуйста, попробуйте еще раз."
-        )
+        await update.effective_message.reply_text(error_message)
 
 
 def main() -> None:
     """
     Основная функция для запуска бота.
     """
+    # Создаем и запускаем цикл событий
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Инициализируем базу данных сразу
+    try:
+        loop.run_until_complete(init_database())
+        logger.info("✅ База данных успешно инициализирована")
+    except Exception as e:
+        logger.error("❌ Ошибка при инициализации базы данных: %s", str(e), exc_info=True)
+        raise  # Останавливаем запуск, если база данных не работает
+
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # Создаем и запускаем планировщик
-    scheduler = AsyncIOScheduler()
+    # Создаем и запускаем планировщик с явным указанием event_loop
+    scheduler = AsyncIOScheduler(event_loop=loop)
     scheduler.start()
     application.bot_data['scheduler'] = scheduler
 
@@ -468,12 +513,19 @@ def main() -> None:
         entry_points=[CommandHandler("book", book_start)],
         states={
             SELECTING_DATE: [CallbackQueryHandler(date_selected, pattern="^date_")],
-            SELECTING_TIME: [CallbackQueryHandler(time_selected, pattern="^time_")],
+            SELECTING_TIME: [
+                CallbackQueryHandler(time_selected, pattern="^time_"),
+                CallbackQueryHandler(back_to_date, pattern="^back_to_date$")
+            ],
             SELECTING_DURATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, duration_selected)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CommandHandler("book", book_start)  # Позволяет перезапустить процесс в любой момент
+        ],
         name="booking_conversation",
         persistent=False,
+        allow_reentry=True  # Разрешаем повторный вход в диалог
     )
 
     # Добавляем обработчики
@@ -487,8 +539,12 @@ def main() -> None:
 
     # Инициализируем базу данных
     async def post_init(application):
-        await init_database()
-        logger.info("База данных инициализирована")
+        try:
+            await init_database()
+            logger.info("✅ База данных успешно инициализирована")
+        except Exception as e:
+            logger.error("❌ Ошибка при инициализации базы данных: %s", str(e), exc_info=True)
+            raise  # Перебрасываем ошибку, чтобы бот не запустился с неработающей БД
 
     # Запускаем бота
     logger.info("Запуск бота...")

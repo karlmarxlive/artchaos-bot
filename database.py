@@ -124,6 +124,12 @@ async def get_or_create_user(telegram_id: int, username: Optional[str], first_na
     Returns:
         User: Объект пользователя или None в случае ошибки
     """
+    if async_session is None:
+        print("❌ Error: Database session is not initialized!")
+        await init_database()  # Пробуем переинициализировать базу данных
+        if async_session is None:
+            raise RuntimeError("Failed to initialize database session")
+
     try:
         async with async_session() as session:
             from sqlalchemy import select

@@ -11,7 +11,7 @@ async def send_reminder(bot: telegram.Bot, telegram_id: int, start_time_str: str
     await bot.send_message(chat_id=telegram_id, text=message)
 
 
-def schedule_reminders(scheduler: AsyncIOScheduler, bot: telegram.Bot, booking, telegram_id: int):
+async def schedule_reminders(scheduler: AsyncIOScheduler, bot: telegram.Bot, booking, telegram_id: int):
     """
     Schedules reminders for a booking based on the business logic.
     """
