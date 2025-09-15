@@ -21,16 +21,16 @@ class User(Base):
     Модель для хранения информации о пользователях.
     """
     __tablename__ = 'users'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     telegram_id = Column(Integer, unique=True, nullable=False)  # ID пользователя в Telegram
     username = Column(String(100), nullable=True)  # Имя пользователя в Telegram
     first_name = Column(String(100), nullable=True)  # Имя пользователя
-    
+
     # Связи
     abonement = relationship("Abonement", back_populates="user", uselist=False)
     bookings = relationship("Booking", back_populates="user")
-    
+
     def __repr__(self):
         return f"<User(id={self.id}, telegram_id={self.telegram_id}, username={self.username})>"
 
@@ -40,14 +40,14 @@ class Abonement(Base):
     Модель для хранения информации об абонементах пользователей.
     """
     __tablename__ = 'abonements'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
     visits_left = Column(Integer, nullable=False, default=0)  # Количество оставшихся посещений
-    
+
     # Связи
     user = relationship("User", back_populates="abonement")
-    
+
     def __repr__(self):
         return f"<Abonement(id={self.id}, user_id={self.user_id}, visits_left={self.visits_left})>"
 
@@ -57,15 +57,15 @@ class Booking(Base):
     Модель для хранения информации о бронированиях.
     """
     __tablename__ = 'bookings'
-    
+
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey('users.id'), nullable=False)  # Внешний ключ к User.id
     start_time = Column(DateTime, nullable=False)  # Время начала бронирования
     end_time = Column(DateTime, nullable=False)  # Время окончания бронирования
-    
+
     # Связи
     user = relationship("User", back_populates="bookings")
-    
+
     def __repr__(self):
         return f"<Booking(id={self.id}, user_id={self.user_id}, start_time={self.start_time})>"
 
@@ -75,18 +75,26 @@ engine = None
 async_session = None
 
 
-async def init_database():
+async def init_database(db_url: str = None):
     """
     Инициализация базы данных и создание таблиц.
+
+    Args:
+        db_url: Optional database URL (e.g. 'sqlite+aiosqlite:///bookings.db').
+                If None, defaults to 'sqlite+aiosqlite:///bookings.db'.
     """
     global engine, async_session
-    
+
+    # Default DB URL
+    if db_url is None:
+        db_url = "sqlite+aiosqlite:///bookings.db"
+
     # Создаем асинхронный движок для SQLite
     engine = create_async_engine(
-        "sqlite+aiosqlite:///bookings.db",
+        db_url,
         echo=False  # Установите True для отладки SQL запросов
     )
-    
+
     # Создаем фабрику сессий
     async_session = async_sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
@@ -119,13 +127,13 @@ async def get_or_create_user(telegram_id: int, username: Optional[str], first_na
     try:
         async with async_session() as session:
             from sqlalchemy import select
-            
+
             # Ищем существующего пользователя
             result = await session.execute(
                 select(User).where(User.telegram_id == telegram_id)
             )
             user = result.scalar_one_or_none()
-            
+
             if user is None:
                 # Создаем нового пользователя
                 user = User(
@@ -135,7 +143,7 @@ async def get_or_create_user(telegram_id: int, username: Optional[str], first_na
                 )
                 session.add(user)
                 await session.flush()  # Получаем ID пользователя
-                
+
                 # Создаем абонемент для нового пользователя
                 abonement = Abonement(
                     user_id=user.id,
@@ -143,7 +151,7 @@ async def get_or_create_user(telegram_id: int, username: Optional[str], first_na
                 )
                 session.add(abonement)
                 await session.commit()
-                
+
                 print(f"Создан новый пользователь: {user}")
             else:
                 # Обновляем информацию о пользователе, если она изменилась
@@ -152,9 +160,9 @@ async def get_or_create_user(telegram_id: int, username: Optional[str], first_na
                     user.first_name = first_name
                     await session.commit()
                     print(f"Обновлена информация о пользователе: {user}")
-            
+
             return user
-            
+
     except Exception as e:
         print(f"Ошибка при получении/создании пользователя: {e}")
         return None
@@ -173,14 +181,14 @@ async def get_user_abonement(user_id: int) -> Optional[Abonement]:
     try:
         async with async_session() as session:
             from sqlalchemy import select
-            
+
             result = await session.execute(
                 select(Abonement).where(Abonement.user_id == user_id)
             )
             abonement = result.scalar_one_or_none()
-            
+
             return abonement
-            
+
     except Exception as e:
         print(f"Ошибка при получении абонемента: {e}")
         return None
@@ -199,21 +207,21 @@ async def decrease_user_visits(user_id: int) -> bool:
     try:
         async with async_session() as session:
             from sqlalchemy import select
-            
+
             result = await session.execute(
                 select(Abonement).where(Abonement.user_id == user_id)
             )
             abonement = result.scalar_one_or_none()
-            
+
             if abonement is None or abonement.visits_left <= 0:
                 return False
-            
+
             abonement.visits_left -= 1
             await session.commit()
-            
+
             print(f"Списано посещение для пользователя {user_id}. Осталось: {abonement.visits_left}")
             return True
-            
+
     except Exception as e:
         print(f"Ошибка при списании посещения: {e}")
         return False
@@ -233,12 +241,12 @@ async def add_user_visits(user_id: int, count: int) -> bool:
     try:
         async with async_session() as session:
             from sqlalchemy import select
-            
+
             result = await session.execute(
                 select(Abonement).where(Abonement.user_id == user_id)
             )
             abonement = result.scalar_one_or_none()
-            
+
             if abonement is None:
                 # Создаем абонемент, если его нет
                 abonement = Abonement(
@@ -248,12 +256,12 @@ async def add_user_visits(user_id: int, count: int) -> bool:
                 session.add(abonement)
             else:
                 abonement.visits_left += count
-            
+
             await session.commit()
-            
+
             print(f"Добавлено {count} посещений для пользователя {user_id}. Всего: {abonement.visits_left}")
             return True
-            
+
     except Exception as e:
         print(f"Ошибка при добавлении посещений: {e}")
         return False
@@ -279,14 +287,14 @@ async def add_booking(user_id: int, start_time: datetime, end_time: datetime) ->
                 start_time=start_time,
                 end_time=end_time
             )
-            
+
             # Добавляем в сессию и сохраняем
             session.add(booking)
             await session.commit()
-            
+
             print(f"Бронирование добавлено: {booking}")
             return booking
-            
+
     except Exception as e:
         print(f"Ошибка при добавлении бронирования: {e}")
         return None
@@ -305,15 +313,15 @@ async def get_user_bookings(user_id: int) -> list:
     try:
         async with async_session() as session:
             from sqlalchemy import select
-            
+
             # Выполняем запрос
             result = await session.execute(
                 select(Booking).where(Booking.user_id == user_id)
             )
             bookings = result.scalars().all()
-            
+
             return list(bookings)
-            
+
     except Exception as e:
         print(f"Ошибка при получении бронирований: {e}")
         return []
@@ -336,7 +344,7 @@ async def check_booking_conflict(start_time: datetime, end_time: datetime) -> bo
     try:
         async with async_session() as session:
             from sqlalchemy import select
-            
+
             # Ищем пересекающиеся бронирования используя классическую формулу
             result = await session.execute(
                 select(Booking).where(
@@ -345,9 +353,9 @@ async def check_booking_conflict(start_time: datetime, end_time: datetime) -> bo
                 )
             )
             conflicting_bookings = result.scalars().all()
-            
+
             return len(conflicting_bookings) > 0
-            
+
     except Exception as e:
         print(f"Ошибка при проверке конфликтов: {e}")
         return True  # В случае ошибки считаем, что есть конфликт
@@ -367,7 +375,7 @@ async def has_booking_on_date(user_id: int, date: datetime.date) -> bool:
     try:
         async with async_session() as session:
             from sqlalchemy import select
-            
+
             # Ищем бронирования пользователя на указанную дату
             result = await session.execute(
                 select(Booking).where(
@@ -376,9 +384,9 @@ async def has_booking_on_date(user_id: int, date: datetime.date) -> bool:
                 )
             )
             bookings = result.scalars().all()
-            
+
             return len(bookings) > 0
-            
+
     except Exception as e:
         print(f"Ошибка при проверке бронирований на дату: {e}")
         return False  # В случае ошибки считаем, что бронирований нет
@@ -390,29 +398,29 @@ async def test_database():
     Простая функция для тестирования работы с базой данных.
     """
     await init_database()
-    
+
     # Создаем тестового пользователя
     user = await get_or_create_user(12345, "test_user", "Test User")
     if user:
         print(f"Тестовый пользователь: {user}")
-        
+
         # Добавляем посещения
         await add_user_visits(user.id, 5)
-        
+
         # Тестовое бронирование
         test_start = datetime.now() + timedelta(days=1)
         test_end = test_start + timedelta(hours=2)
-        
+
         success = await add_booking(user.id, test_start, test_end)
         print(f"Тестовое бронирование добавлено: {success}")
-        
+
         bookings = await get_user_bookings(user.id)
         print(f"Бронирования пользователя: {bookings}")
-        
+
         # Проверяем абонемент
         abonement = await get_user_abonement(user.id)
         print(f"Абонемент пользователя: {abonement}")
-    
+
     await close_database()
 
 

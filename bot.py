@@ -47,8 +47,44 @@ TIME_SLOTS = [
 ]
 
 
-# ID администратора (замените на свой)
-ADMIN_TELEGRAM_ID = 411840215  # Замените на ваш Telegram ID
+# Админский Telegram ID — читается из переменной окружения
+ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID")
+if ADMIN_TELEGRAM_ID is not None:
+    try:
+        ADMIN_TELEGRAM_ID = int(ADMIN_TELEGRAM_ID)
+    except ValueError:
+        raise ValueError("Переменная окружения ADMIN_TELEGRAM_ID должна быть целым числом")
+
+
+"""
+Все пользовательские строки хранятся в `MESSAGES` для удобства локализации и правок.
+Изменяйте тексты здесь, не разбрасывая их по коду.
+"""
+MESSAGES = {
+    'welcome': "Привет, {first_name}! 👋\n\nДобро пожаловать в бот для бронирования времени в творческой мастерской! 🎨\n\nДоступные команды:\n/book - Забронировать время\n/help - Показать справку",
+    'help_base': "📋 Справка по использованию бота:\n\n/start - Начать работу с ботом\n/book - Забронировать время в мастерской\n/help - Показать эту справку\n\n💡 Для бронирования используйте команду /book и следуйте инструкциям бота.\n🎫 Для бронирования необходимо иметь абонемент с доступными посещениями.",
+    'help_admin_extra': "\n\n🔧 Админские команды:\n/add_visits <telegram_id> <количество> - Добавить посещения пользователю",
+    'db_error': "❌ Произошла ошибка при работе с базой данных. Попробуйте позже.",
+    'choose_date': "📅 На какой день вы хотите записаться?\n\nВыберите дату из списка ниже:",
+    'past_date': "❌ Нельзя выбрать прошедшую дату. Пожалуйста, выберите другую:",
+    'choose_time': "✅ Отлично! Вы выбрали {date_str}\n\n🕐 Теперь выберите время начала бронирования:",
+    'enter_duration': "✅ Время выбрано: {time_str}\n\n⏱️ На сколько часов вы хотите записаться?\n\nВведите число (например, 1.5 или 2) или минуты (например, 30):",
+    'invalid_duration': "❌ Пожалуйста, введите корректное число часов (например, 1.5 или 2) или минут (например, 30).\n\nПопробуйте еще раз:",
+    'duration_range': "❌ Пожалуйста, введите число часов (например, 1.5 или 2) или минут (например, 30).\n\nДиапазон: от 30 минут до 8 часов.\nПопробуйте еще раз:",
+    'time_in_past': "❌ Это время уже прошло! Пожалуйста, выберите другое время",
+    'conflict': "❌ Увы, выбранное время и длительность уже заняты.\n\nПожалуйста, выберите другое время начала:",
+    'no_visits': "❌ У вас нет доступных посещений. Пожалуйста, сначала приобретите абонемент с помощью команды /buy.",
+    'decrease_failed': "❌ Не удалось списать посещение. Попробуйте еще раз.",
+    'booking_save_error': "❌ Произошла ошибка при сохранении бронирования.\n\nПожалуйста, попробуйте еще раз, используя команду /book",
+    'cancelled': "❌ Бронирование отменено.\n\nЕсли захотите забронировать время, используйте команду /book",
+    'add_visits_invalid': "❌ Неверный формат команды.\n\nИспользуйте: /add_visits <telegram_id> <количество>\nПример: /add_visits 123456789 5",
+    'add_visits_positive': "❌ Количество посещений должно быть положительным числом.",
+    'add_visits_success': "✅ Успешно добавлено {count} посещений пользователю {telegram_id}.\n🎫 Всего посещений: {total}",
+    'add_visits_error': "❌ Ошибка при добавлении посещений.",
+    'add_visits_format_error': "❌ Неверный формат аргументов. Используйте числа.",
+    'generic_error': "❌ Произошла ошибка. Пожалуйста, попробуйте еще раз.",
+    'no_admin_rights': "❌ У вас нет прав для выполнения этой команды.",
+}
 
 
 def get_date_buttons() -> InlineKeyboardMarkup:
@@ -60,15 +96,14 @@ def get_date_buttons() -> InlineKeyboardMarkup:
     """
     keyboard = []
     today = datetime.now().date()
-    
+
     # Создаем кнопки для ближайших 7 дней
     for i in range(7):
         date = today + timedelta(days=i)
         button_text = date.strftime("%d.%m (%a)")
         callback_data = f"date_{date.strftime('%Y-%m-%d')}"
-        
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-    
+
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -80,7 +115,7 @@ def get_time_buttons() -> InlineKeyboardMarkup:
         InlineKeyboardMarkup: Клавиатура с временными слотами
     """
     keyboard = []
-    
+
     # Создаем кнопки по 2 в ряд для лучшего отображения
     for i in range(0, len(TIME_SLOTS), 2):
         row = []
@@ -89,7 +124,7 @@ def get_time_buttons() -> InlineKeyboardMarkup:
                 time_slot = TIME_SLOTS[i + j]
                 row.append(InlineKeyboardButton(time_slot, callback_data=f"time_{time_slot}"))
         keyboard.append(row)
-    
+
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -98,15 +133,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     Обработчик команды /start.
     """
     user = update.effective_user
-    welcome_message = (
-        f"Привет, {user.first_name}! 👋\n\n"
-        "Добро пожаловать в бот для бронирования времени в творческой мастерской! 🎨\n\n"
-        "Доступные команды:\n"
-        "/book - Забронировать время\n"
-        "/help - Показать справку"
-    )
-    
-    await update.message.reply_text(welcome_message)
+    await update.message.reply_text(MESSAGES['welcome'].format(first_name=user.first_name))
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -114,23 +141,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     Обработчик команды /help.
     """
     user = update.effective_user
-    
-    help_text = (
-        "📋 Справка по использованию бота:\n\n"
-        "/start - Начать работу с ботом\n"
-        "/book - Забронировать время в мастерской\n"
-        "/help - Показать эту справку\n\n"
-        "💡 Для бронирования используйте команду /book и следуйте инструкциям бота.\n"
-        "🎫 Для бронирования необходимо иметь абонемент с доступными посещениями."
-    )
-    
-    # Добавляем админские команды для администратора
-    if user.id == ADMIN_TELEGRAM_ID:
-        help_text += (
-            "\n\n🔧 Админские команды:\n"
-            "/add_visits <telegram_id> <количество> - Добавить посещения пользователю"
-        )
-    
+    help_text = MESSAGES['help_base']
+
+    # Добавляем админские команды для администратора (если ADMIN_TELEGRAM_ID настроен)
+    if ADMIN_TELEGRAM_ID and user.id == ADMIN_TELEGRAM_ID:
+        help_text += MESSAGES['help_admin_extra']
+
     await update.message.reply_text(help_text)
 
 
@@ -142,33 +158,27 @@ async def book_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         int: Следующее состояние ConversationHandler
     """
     user = update.effective_user
-    
+
     # Получаем или создаем пользователя в базе данных
     db_user = await get_or_create_user(
         telegram_id=user.id,
         username=user.username,
         first_name=user.first_name
     )
-    
+
     if db_user is None:
-        await update.message.reply_text(
-            "❌ Произошла ошибка при работе с базой данных. Попробуйте позже."
-        )
+        await update.message.reply_text(MESSAGES['db_error'])
         return ConversationHandler.END
-    
+
     # Сохраняем внутренний ID пользователя из БД в контексте
     context.user_data['user_id'] = db_user.id
     context.user_data['telegram_id'] = user.id
     context.user_data['username'] = user.username or user.first_name
-    
-    message = (
-        "📅 На какой день вы хотите записаться?\n\n"
-        "Выберите дату из списка ниже:"
-    )
-    
+
+    message = MESSAGES['choose_date']
     keyboard = get_date_buttons()
     await update.message.reply_text(message, reply_markup=keyboard)
-    
+
     return SELECTING_DATE
 
 
@@ -181,7 +191,7 @@ async def date_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     """
     query = update.callback_query
     await query.answer()
-    
+
     # Извлекаем дату из callback_data
     date_str = query.data.split('_')[1]  # "date_2024-01-15" -> "2024-01-15"
     selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
@@ -189,22 +199,18 @@ async def date_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # Проверка, не выбрана ли прошедшая дата
     if selected_date < datetime.now().date():
         await query.edit_message_text(
-            text="❌ Нельзя выбрать прошедшую дату. Пожалуйста, выберите другую:",
+            text=MESSAGES['past_date'],
             reply_markup=get_date_buttons()
         )
         return SELECTING_DATE
-    
+
     # Сохраняем выбранную дату в контексте
     context.user_data['selected_date'] = selected_date
-    
-    message = (
-        f"✅ Отлично! Вы выбрали {selected_date.strftime('%d.%m.%Y')}\n\n"
-        "🕐 Теперь выберите время начала бронирования:"
-    )
-    
+
+    message = MESSAGES['choose_time'].format(date_str=selected_date.strftime('%d.%m.%Y'))
     keyboard = get_time_buttons()
     await query.edit_message_text(message, reply_markup=keyboard)
-    
+
     return SELECTING_TIME
 
 
@@ -217,22 +223,17 @@ async def time_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     """
     query = update.callback_query
     await query.answer()
-    
+
     # Извлекаем время из callback_data
     time_str = query.data.split('_')[1]  # "time_14:00" -> "14:00"
     hour, minute = map(int, time_str.split(':'))
-    
+
     # Сохраняем выбранное время в контексте
     context.user_data['selected_time'] = time_str
     context.user_data['selected_hour'] = hour
     context.user_data['selected_minute'] = minute
-    
-    message = (
-        f"✅ Время выбрано: {time_str}\n\n"
-        "⏱️ На сколько часов вы хотите записаться?\n\n"
-        "Введите число (например, 1.5 или 2) или минуты (например, 30):"
-    )
-    
+
+    message = MESSAGES['enter_duration'].format(time_str=time_str)
     await query.edit_message_text(message)
     return SELECTING_DURATION
 
@@ -246,11 +247,11 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """
     # Извлекаем текст из сообщения пользователя
     duration_text = update.message.text.strip()
-    
+
     try:
         # Пытаемся преобразовать в число
         duration_value = float(duration_text)
-        
+
         # Умный парсинг: если число больше 8, считаем его минутами
         if duration_value > 8:
             # Считаем как минуты
@@ -258,30 +259,26 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         else:
             # Считаем как часы
             duration_hours = duration_value
-        
+
         # Проверяем, что число в допустимом диапазоне (от 0.5 до 8 часов)
         if duration_hours < 0.5 or duration_hours > 8:
-            await update.message.reply_text(
-                "❌ Пожалуйста, введите число часов (например, 1.5 или 2) или минут (например, 30).\n\n"
-                "Диапазон: от 30 минут до 8 часов.\n"
-                "Попробуйте еще раз:"
-            )
+            await update.message.reply_text(MESSAGES['duration_range'])
             return SELECTING_DURATION
-            
+
     except ValueError:
         await update.message.reply_text(
             "❌ Пожалуйста, введите корректное число часов (например, 1.5 или 2) или минут (например, 30).\n\n"
             "Попробуйте еще раз:"
         )
         return SELECTING_DURATION
-    
+
     # Получаем данные из контекста
     user_id = context.user_data['user_id']
     selected_date = context.user_data['selected_date']
     selected_hour = context.user_data['selected_hour']
     selected_minute = context.user_data['selected_minute']
     selected_time = context.user_data['selected_time']
-    
+
     # Создаем datetime объекты для начала и окончания бронирования
     start_time = datetime.combine(selected_date, time(selected_hour, selected_minute))
     end_time = start_time + timedelta(hours=duration_hours)
@@ -289,51 +286,42 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Проверяем, не пытается ли пользователь забронировать время в прошлом
     if start_time < datetime.now():
         await update.message.reply_text(
-            "❌ Это время уже прошло! Пожалуйста, выберите другое время",
+            MESSAGES['time_in_past'],
             reply_markup=get_time_buttons()
         )
         return SELECTING_TIME
-    
+
     # Проверяем, не конфликтует ли бронирование с существующими
     has_conflict = await check_booking_conflict(start_time, end_time)
-    
+
     if has_conflict:
-        message = (
-            "❌ Увы, выбранное время и длительность уже заняты.\n\n"
-            "Пожалуйста, выберите другое время начала:"
-        )
+        message = MESSAGES['conflict']
         keyboard = get_time_buttons()
         await update.message.reply_text(message, reply_markup=keyboard)
         return SELECTING_TIME
-    
+
     # Проверяем, является ли это первым бронированием пользователя на выбранную дату
     is_first_booking_today = not await has_booking_on_date(user_id, selected_date)
-    
+
     # Если это первое бронирование за день, проверяем и списываем посещение
     if is_first_booking_today:
         # Проверяем абонемент пользователя
         abonement = await get_user_abonement(user_id)
-        
+
         if abonement is None or abonement.visits_left <= 0:
-            message = (
-                "❌ У вас нет доступных посещений. Пожалуйста, сначала приобретите абонемент с помощью команды /buy."
-            )
-            await update.message.reply_text(message)
+            await update.message.reply_text(MESSAGES['no_visits'])
             return ConversationHandler.END
-        
+
         # Списываем одно посещение
         visit_decreased = await decrease_user_visits(user_id)
-        
+
         if not visit_decreased:
-            message = (
-                "❌ Не удалось списать посещение. Попробуйте еще раз."
-            )
-            await update.message.reply_text(message)
+            await update.message.reply_text(MESSAGES['decrease_failed'])
             return ConversationHandler.END
-    
+
     # Добавляем бронирование в базу данных (в любом случае)
     new_booking_object = await add_booking(user_id, start_time, end_time)
-    
+
     if new_booking_object:
         # Планируем напоминания
         scheduler = context.application.bot_data['scheduler']
@@ -354,13 +342,13 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             duration_text = f"{int(duration_hours)} часа"
         else:
             duration_text = f"{duration_hours} часа"
-        
+
         # Формируем сообщение в зависимости от того, было ли списано посещение
         if is_first_booking_today:
             # Получаем обновленную информацию об абонементе
             updated_abonement = await get_user_abonement(user_id)
             visits_left = updated_abonement.visits_left if updated_abonement else 0
-            
+
             message = (
                 f"🎉 Поздравляем! Вы успешно записаны!\n\n"
                 f"📅 Дата: {selected_date.strftime('%d.%m.%Y')}\n"
@@ -382,12 +370,9 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         # Если бронирование не удалось, возвращаем посещение только если оно было списано
         if is_first_booking_today:
             await add_user_visits(user_id, 1)
-        
-        message = (
-            "❌ Произошла ошибка при сохранении бронирования.\n\n"
-            "Пожалуйста, попробуйте еще раз, используя команду /book"
-        )
-    
+
+        message = MESSAGES['booking_save_error']
+
     await update.message.reply_text(message)
     return ConversationHandler.END
 
@@ -412,56 +397,49 @@ async def add_visits(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     Формат: /add_visits <telegram_id> <количество>
     """
     user = update.effective_user
-    
+
     # Проверяем, что команду вызывает администратор
-    if user.id != ADMIN_TELEGRAM_ID:
-        await update.message.reply_text("❌ У вас нет прав для выполнения этой команды.")
+    if ADMIN_TELEGRAM_ID is None or user.id != ADMIN_TELEGRAM_ID:
+        await update.message.reply_text(MESSAGES['no_admin_rights'])
         return
-    
+
     # Проверяем аргументы команды
     if not context.args or len(context.args) != 2:
-        await update.message.reply_text(
-            "❌ Неверный формат команды.\n\n"
-            "Используйте: /add_visits <telegram_id> <количество>\n"
-            "Пример: /add_visits 123456789 5"
-        )
+        await update.message.reply_text(MESSAGES['add_visits_invalid'])
         return
-    
+
     try:
         telegram_id = int(context.args[0])
         count = int(context.args[1])
-        
+
         if count <= 0:
-            await update.message.reply_text("❌ Количество посещений должно быть положительным числом.")
+            await update.message.reply_text(MESSAGES['add_visits_positive'])
             return
-        
+
         # Получаем или создаем пользователя
         db_user = await get_or_create_user(telegram_id, None, None)
-        
+
         if db_user is None:
-            await update.message.reply_text("❌ Ошибка при работе с базой данных.")
+            await update.message.reply_text(MESSAGES['db_error'])
             return
-        
+
         # Добавляем посещения
         success = await add_user_visits(db_user.id, count)
-        
+
         if success:
             # Получаем обновленную информацию об абонементе
             abonement = await get_user_abonement(db_user.id)
             total_visits = abonement.visits_left if abonement else 0
-            
-            await update.message.reply_text(
-                f"✅ Успешно добавлено {count} посещений пользователю {telegram_id}.\n"
-                f"🎫 Всего посещений: {total_visits}"
-            )
+
+            await update.message.reply_text(MESSAGES['add_visits_success'].format(count=count, telegram_id=telegram_id, total=total_visits))
         else:
-            await update.message.reply_text("❌ Ошибка при добавлении посещений.")
-            
+            await update.message.reply_text(MESSAGES['add_visits_error'])
+
     except ValueError:
-        await update.message.reply_text("❌ Неверный формат аргументов. Используйте числа.")
+        await update.message.reply_text(MESSAGES['add_visits_format_error'])
     except Exception as e:
         logger.error(f"Ошибка в команде add_visits: {e}")
-        await update.message.reply_text("❌ Произошла ошибка при выполнении команды.")
+        await update.message.reply_text(MESSAGES['generic_error'])
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -486,7 +464,7 @@ def main() -> None:
     scheduler = AsyncIOScheduler()
     scheduler.start()
     application.bot_data['scheduler'] = scheduler
-    
+
     # Создаем ConversationHandler для диалога бронирования
     booking_conversation = ConversationHandler(
         entry_points=[CommandHandler("book", book_start)],
@@ -499,21 +477,21 @@ def main() -> None:
         name="booking_conversation",
         persistent=False,
     )
-    
+
     # Добавляем обработчики
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("add_visits", add_visits))
     application.add_handler(booking_conversation)
-    
+
     # Добавляем обработчик ошибок
     application.add_error_handler(error_handler)
-    
+
     # Инициализируем базу данных
     async def post_init(application):
         await init_database()
         logger.info("База данных инициализирована")
-    
+
     # Запускаем бота
     logger.info("Запуск бота...")
     application.post_init = post_init

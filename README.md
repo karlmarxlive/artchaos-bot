@@ -36,6 +36,18 @@ $env:TELEGRAM_TEST_BOT_API="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
 export TELEGRAM_TEST_BOT_API="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
 ```
 
+Также настройте `ADMIN_TELEGRAM_ID` (Telegram ID администратора) в переменной окружения:
+
+**Windows (PowerShell):**
+```powershell
+$env:ADMIN_TELEGRAM_ID="411840215"
+```
+
+**Linux/macOS:**
+```bash
+export ADMIN_TELEGRAM_ID="411840215"
+```
+
 ### 3. Запуск бота
 
 ```bash
