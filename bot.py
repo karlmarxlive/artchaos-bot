@@ -15,11 +15,14 @@ from telegram.ext import (
     ConversationHandler, ContextTypes, MessageHandler, filters
 )
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
 from database import (
     init_database, close_database, add_booking, check_booking_conflict,
     get_or_create_user, get_user_abonement, decrease_user_visits, add_user_visits,
     has_booking_on_date
 )
+from scheduler import schedule_reminders
 
 # Настройка логирования
 logging.basicConfig(
@@ -182,6 +185,14 @@ async def date_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # Извлекаем дату из callback_data
     date_str = query.data.split('_')[1]  # "date_2024-01-15" -> "2024-01-15"
     selected_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+
+    # Проверка, не выбрана ли прошедшая дата
+    if selected_date < datetime.now().date():
+        await query.edit_message_text(
+            text="❌ Нельзя выбрать прошедшую дату. Пожалуйста, выберите другую:",
+            reply_markup=get_date_buttons()
+        )
+        return SELECTING_DATE
     
     # Сохраняем выбранную дату в контексте
     context.user_data['selected_date'] = selected_date
@@ -274,6 +285,14 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Создаем datetime объекты для начала и окончания бронирования
     start_time = datetime.combine(selected_date, time(selected_hour, selected_minute))
     end_time = start_time + timedelta(hours=duration_hours)
+
+    # Проверяем, не пытается ли пользователь забронировать время в прошлом
+    if start_time < datetime.now():
+        await update.message.reply_text(
+            "❌ Это время уже прошло! Пожалуйста, выберите другое время",
+            reply_markup=get_time_buttons()
+        )
+        return SELECTING_TIME
     
     # Проверяем, не конфликтует ли бронирование с существующими
     has_conflict = await check_booking_conflict(start_time, end_time)
@@ -313,9 +332,18 @@ async def duration_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return ConversationHandler.END
     
     # Добавляем бронирование в базу данных (в любом случае)
-    success = await add_booking(user_id, start_time, end_time)
+    new_booking_object = await add_booking(user_id, start_time, end_time)
     
-    if success:
+    if new_booking_object:
+        # Планируем напоминания
+        scheduler = context.application.bot_data['scheduler']
+        await schedule_reminders(
+            scheduler,
+            context.bot,
+            new_booking_object,
+            context.user_data['telegram_id']
+        )
+
         # Форматируем длительность для отображения
         if duration_hours == 1:
             duration_text = "1 час"
@@ -453,6 +481,11 @@ def main() -> None:
     """
     # Создаем приложение
     application = Application.builder().token(BOT_TOKEN).build()
+
+    # Создаем и запускаем планировщик
+    scheduler = AsyncIOScheduler()
+    scheduler.start()
+    application.bot_data['scheduler'] = scheduler
     
     # Создаем ConversationHandler для диалога бронирования
     booking_conversation = ConversationHandler(

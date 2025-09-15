@@ -259,7 +259,7 @@ async def add_user_visits(user_id: int, count: int) -> bool:
         return False
 
 
-async def add_booking(user_id: int, start_time: datetime, end_time: datetime) -> bool:
+async def add_booking(user_id: int, start_time: datetime, end_time: datetime) -> Optional[Booking]:
     """
     Добавляет новое бронирование в базу данных.
     
@@ -269,7 +269,7 @@ async def add_booking(user_id: int, start_time: datetime, end_time: datetime) ->
         end_time: Время окончания бронирования
     
     Returns:
-        bool: True если бронирование успешно добавлено, False в случае ошибки
+        Booking: Созданный объект бронирования или None в случае ошибки
     """
     try:
         async with async_session() as session:
@@ -285,11 +285,11 @@ async def add_booking(user_id: int, start_time: datetime, end_time: datetime) ->
             await session.commit()
             
             print(f"Бронирование добавлено: {booking}")
-            return True
+            return booking
             
     except Exception as e:
         print(f"Ошибка при добавлении бронирования: {e}")
-        return False
+        return None
 
 
 async def get_user_bookings(user_id: int) -> list:
